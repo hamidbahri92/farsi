@@ -1,0 +1,106 @@
+name: fetch-eda-tools
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fetch-eda-tools.yml'
+      - 'tool-fetch-trigger.txt'
+  pull_request:
+    paths:
+      - '.github/workflows/fetch-eda-tools.yml'
+      - 'tool-fetch-trigger.txt'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fetch:
+    name: fetch ${{ matrix.tool.name }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        tool:
+          - name: oss-cad-suite-linux-x64-20260517
+            filename: oss-cad-suite-linux-x64-20260517.tgz
+            url: https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-05-17/oss-cad-suite-linux-x64-20260517.tgz
+            required: true
+          - name: openroad-26Q1-ubuntu22-amd64
+            filename: openroad_26Q1-951-g6975124cf2_amd64-ubuntu-22.04.deb
+            url: https://vaultlink.precisioninno.com/openroad_26Q1-951-g6975124cf2_amd64-ubuntu-22.04.deb
+            required: false
+          - name: klayout-0.30.8-ubuntu22-amd64
+            filename: klayout_0.30.8-1_amd64.deb
+            url: https://www.klayout.org/downloads/Ubuntu-22/klayout_0.30.8-1_amd64.deb
+            required: false
+          - name: magic-8.3.105-amd64
+            filename: magic_8.3.105+ds.1-1.1_amd64.deb
+            url: https://ftp.debian.org/debian/pool/main/m/magic/magic_8.3.105+ds.1-1.1_amd64.deb
+            required: false
+          - name: netgen-lvs-1.5.133-amd64
+            filename: netgen-lvs_1.5.133-1.2_amd64.deb
+            url: https://ftp.debian.org/debian/pool/main/n/netgen-lvs/netgen-lvs_1.5.133-1.2_amd64.deb
+            required: false
+
+    steps:
+      - name: Prepare output directory
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          {
+            echo "tool=${{ matrix.tool.name }}"
+            echo "filename=${{ matrix.tool.filename }}"
+            echo "url=${{ matrix.tool.url }}"
+            echo "required=${{ matrix.tool.required }}"
+            echo "runner=$(uname -a)"
+            echo "timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } > dist/${{ matrix.tool.name }}.manifest.txt
+
+      - name: Download tool archive/package
+        id: download
+        continue-on-error: true
+        run: |
+          set -u
+          url='${{ matrix.tool.url }}'
+          output='dist/${{ matrix.tool.filename }}'
+          echo "Downloading ${url}"
+          curl -L --retry 5 --retry-delay 10 --connect-timeout 30 --max-time 5400 \
+            --fail --output "${output}" "${url}"
+          status=$?
+          echo "curl_status=${status}" | tee -a dist/${{ matrix.tool.name }}.manifest.txt
+          if [ "${status}" -eq 0 ]; then
+            bytes=$(wc -c < "${output}" | tr -d ' ')
+            sha256sum "${output}" | tee dist/${{ matrix.tool.filename }}.sha256
+            echo "bytes=${bytes}" | tee -a dist/${{ matrix.tool.name }}.manifest.txt
+          else
+            echo "download_failed=1" | tee -a dist/${{ matrix.tool.name }}.manifest.txt
+            rm -f "${output}"
+            exit "${status}"
+          fi
+
+      - name: Mark optional failures without failing whole matrix
+        if: ${{ steps.download.outcome == 'failure' && matrix.tool.required == false }}
+        run: |
+          echo "optional_download_failed=true" | tee -a dist/${{ matrix.tool.name }}.manifest.txt
+
+      - name: Fail required downloads
+        if: ${{ steps.download.outcome == 'failure' && matrix.tool.required == true }}
+        run: |
+          cat dist/${{ matrix.tool.name }}.manifest.txt || true
+          exit 1
+
+      - name: Upload fetched tool artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.tool.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
