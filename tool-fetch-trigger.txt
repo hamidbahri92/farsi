@@ -1,0 +1,2 @@
+trigger=tool-artifacts-setup
+purpose=Fetch public EDA tool bundles as GitHub Actions artifacts for external local cache installation.
